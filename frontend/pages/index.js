@@ -59,6 +59,20 @@ function renderMarkdown(text) {
 
 
 export default function Home({ isAdmin = false }) {
+  // Auth state
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [token, setToken] = useState(null);
+  const [username, setUsername] = useState("");
+  
+  // Auth Form inputs
+  const [authMode, setAuthMode] = useState("login"); // "login" or "register"
+  const [authUsername, setAuthUsername] = useState("");
+  const [authPassword, setAuthPassword] = useState("");
+  const [authError, setAuthError] = useState("");
+  const [authSuccess, setAuthSuccess] = useState("");
+  const [authLoading, setAuthLoading] = useState(false);
+
+  // Application state
   const [documents, setDocuments] = useState([]);
   const [activeDocId, setActiveDocId] = useState(null);
   const [messages, setMessages] = useState([]);
@@ -66,19 +80,121 @@ export default function Home({ isAdmin = false }) {
   const [uploading, setUploading] = useState(false);
   const [asking, setAsking] = useState(false);
 
-  // Load the list of already-uploaded documents when the page first loads.
+  // Check for stored credentials on mount
   useEffect(() => {
-    fetchDocuments();
+    const savedToken = localStorage.getItem("token");
+    const savedUsername = localStorage.getItem("username");
+    if (savedToken && savedUsername) {
+      setToken(savedToken);
+      setUsername(savedUsername);
+      setIsAuthenticated(true);
+    }
   }, []);
+
+  // Load the list of documents when authentication changes.
+  useEffect(() => {
+    if (isAuthenticated && token) {
+      fetchDocuments();
+    }
+  }, [isAuthenticated, token]);
+
+  // Load chat history when selected document changes.
+  useEffect(() => {
+    if (activeDocId && token) {
+      fetchChatHistory(activeDocId);
+    } else {
+      setMessages([]);
+    }
+  }, [activeDocId, token]);
 
   async function fetchDocuments() {
     try {
-      const res = await fetch(`${API_BASE}/documents`);
+      const res = await fetch(`${API_BASE}/documents`, {
+        headers: {
+          "Authorization": `Bearer ${token}`
+        }
+      });
+      if (res.status === 401) {
+        handleLogout();
+        return;
+      }
       const data = await res.json();
       setDocuments(data.documents || []);
     } catch (err) {
       console.error("Failed to load documents:", err);
     }
+  }
+
+  async function fetchChatHistory(docId) {
+    try {
+      const res = await fetch(`${API_BASE}/chat/history/${docId}`, {
+        headers: {
+          "Authorization": `Bearer ${token}`
+        }
+      });
+      if (res.status === 401) {
+        handleLogout();
+        return;
+      }
+      const data = await res.json();
+      setMessages(data.history || []);
+    } catch (err) {
+      console.error("Failed to load chat history:", err);
+    }
+  }
+
+
+  async function handleAuthSubmit(e) {
+    e.preventDefault();
+    if (!authUsername.trim() || !authPassword.trim()) {
+      setAuthError("Please fill in all fields.");
+      return;
+    }
+
+    setAuthLoading(true);
+    setAuthError("");
+    setAuthSuccess("");
+
+    try {
+      const endpoint = authMode === "login" ? "/auth/login" : "/auth/register";
+      const res = await fetch(`${API_BASE}${endpoint}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username: authUsername, password: authPassword })
+      });
+      const data = await res.json();
+
+      if (!res.ok) throw new Error(data.detail || "Authentication failed");
+
+      if (authMode === "login") {
+        localStorage.setItem("token", data.access_token);
+        localStorage.setItem("username", data.username);
+        setToken(data.access_token);
+        setUsername(data.username);
+        setIsAuthenticated(true);
+        setAuthUsername("");
+        setAuthPassword("");
+      } else {
+        setAuthSuccess("Registration successful! You can now sign in.");
+        setAuthMode("login");
+        setAuthPassword("");
+      }
+    } catch (err) {
+      setAuthError(err.message);
+    } finally {
+      setAuthLoading(false);
+    }
+  }
+
+  function handleLogout() {
+    localStorage.removeItem("token");
+    localStorage.removeItem("username");
+    setToken(null);
+    setUsername("");
+    setIsAuthenticated(false);
+    setDocuments([]);
+    setActiveDocId(null);
+    setMessages([]);
   }
 
   async function handleUpload(event) {
@@ -92,6 +208,9 @@ export default function Home({ isAdmin = false }) {
     try {
       const res = await fetch(`${API_BASE}/upload`, {
         method: "POST",
+        headers: {
+          "Authorization": `Bearer ${token}`
+        },
         body: formData,
       });
       const data = await res.json();
@@ -119,7 +238,10 @@ export default function Home({ isAdmin = false }) {
     try {
       const res = await fetch(`${API_BASE}/chat`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { 
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${token}`
+        },
         body: JSON.stringify({ question: userMessage.content, doc_id: activeDocId }),
       });
       const data = await res.json();
@@ -139,8 +261,122 @@ export default function Home({ isAdmin = false }) {
     }
   }
 
+  async function handleClearChat() {
+    if (!activeDocId || !token) return;
+    if (!confirm("Are you sure you want to delete all chat history for this document?")) return;
+
+    try {
+      const res = await fetch(`${API_BASE}/chat/history/${activeDocId}`, {
+        method: "DELETE",
+        headers: {
+          "Authorization": `Bearer ${token}`
+        }
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || "Failed to clear chat");
+      
+      setMessages([]);
+    } catch (err) {
+      alert(err.message);
+    }
+  }
+
+  // --- Auth View ---
+  if (!isAuthenticated) {
+    return (
+      <div className="auth-wrapper">
+        <div className="auth-card">
+          <div className="auth-header">
+            <h1 className="auth-title">
+              {authMode === "login" ? "Welcome to DocQuery" : "Create Account"}
+            </h1>
+            <p className="auth-subtitle">
+              {authMode === "login"
+                ? "Sign in to upload and chat with your documents"
+                : "Register a new account to get started"}
+            </p>
+          </div>
+
+          {authError && <div className="error-banner">{authError}</div>}
+          {authSuccess && <div className="success-banner">{authSuccess}</div>}
+
+          <form onSubmit={handleAuthSubmit} className="auth-form">
+            <div className="form-group">
+              <label className="form-label">Username</label>
+              <input
+                type="text"
+                className="form-input"
+                placeholder="Enter your username"
+                value={authUsername}
+                onChange={(e) => setAuthUsername(e.target.value)}
+                disabled={authLoading}
+                required
+              />
+            </div>
+            
+            <div className="form-group">
+              <label className="form-label">Password</label>
+              <input
+                type="password"
+                className="form-input"
+                placeholder="Enter your password"
+                value={authPassword}
+                onChange={(e) => setAuthPassword(e.target.value)}
+                disabled={authLoading}
+                required
+              />
+            </div>
+
+            <button type="submit" className="auth-btn" disabled={authLoading}>
+              {authLoading ? (
+                <svg className="animate-spin" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                  <circle cx="12" cy="12" r="10" stroke="rgba(255,255,255,0.1)" strokeDasharray="32" />
+                  <path d="M12 2a10 10 0 0 1 10 10" strokeLinecap="round" />
+                </svg>
+              ) : (
+                authMode === "login" ? "Sign In" : "Sign Up"
+              )}
+            </button>
+          </form>
+
+          <div className="auth-footer">
+            {authMode === "login" ? (
+              <>
+                Don't have an account?
+                <button className="auth-toggle-btn" onClick={() => { setAuthMode("register"); setAuthError(""); setAuthSuccess(""); }}>
+                  Register
+                </button>
+              </>
+            ) : (
+              <>
+                Already have an account?
+                <button className="auth-toggle-btn" onClick={() => { setAuthMode("login"); setAuthError(""); setAuthSuccess(""); }}>
+                  Sign In
+                </button>
+              </>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // --- Main Dashboard ---
   return (
-    <div className="container">
+    <div className="container" style={{ position: "relative" }}>
+      <div className="header-right">
+        <div className="user-badge">
+          <svg className="user-badge-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
+            <circle cx="12" cy="7" r="4" />
+          </svg>
+          <span>{username}</span>
+        </div>
+        <button className="logout-link-btn" onClick={handleLogout}>
+          Logout
+        </button>
+      </div>
+
       <header className="header">
         <h1 className="title">DocQuery</h1>
         <p className="subtitle">
@@ -216,6 +452,18 @@ export default function Home({ isAdmin = false }) {
       {/* Chat Card */}
       {activeDocId && (
         <div className="card">
+          <div className="chat-header">
+            <h3 className="chat-header-title">
+              Chatting with: <span className="chat-header-filename">{documents.find(d => d.doc_id === activeDocId)?.filename}</span>
+            </h3>
+            <button className="clear-chat-btn" onClick={handleClearChat}>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                <polyline points="3 6 5 6 21 6"></polyline>
+                <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+              </svg>
+              Clear Chat
+            </button>
+          </div>
           <div className="chat-window">
             {messages.length === 0 && (
               <div className="welcome-screen">
@@ -234,16 +482,7 @@ export default function Home({ isAdmin = false }) {
             {messages.map((msg, i) => (
               <div key={i} className={`message ${msg.role}`}>
                 <div>{renderMarkdown(msg.content)}</div>
-                {isAdmin && msg.sources && msg.sources.length > 0 && (
-                  <div className="sources-container">
-                    <div className="sources-title">Retrieved Source Context:</div>
-                    {msg.sources.map((src, idx) => (
-                      <div key={idx} className="source-item">
-                        {src}
-                      </div>
-                    ))}
-                  </div>
-                )}
+
               </div>
             ))}
             {asking && (

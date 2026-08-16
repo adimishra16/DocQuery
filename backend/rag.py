@@ -31,6 +31,8 @@ from pypdf import PdfReader
 from dotenv import load_dotenv
 from google import genai
 from google.genai import types
+from sqlalchemy.orm import Session
+from models import DocumentChunk
 
 load_dotenv()
 
@@ -54,14 +56,17 @@ def get_genai_client() -> genai.Client:
     return genai.Client(api_key=api_key)
 
 # ---------------------------------------------------------------------------
-# IN-MEMORY VECTOR STORE
+# IN-MEMORY VECTOR STORE CACHE & DISK PERSISTENCE
 # ---------------------------------------------------------------------------
-# For a demo project, we keep one FAISS index + chunk list PER document,
-# stored in a plain Python dict. In production this would be a persistent
-# vector DB (Supabase Vector / Pinecone) so it survives a server restart and
-# scales beyond what fits in RAM.
-FAISS_INDEXES = {}   # doc_id -> faiss.IndexFlatL2
-DOC_CHUNKS = {}       # doc_id -> list of chunk strings (same order as the index)
+FAISS_INDEXES = {}   # Cache: doc_id -> faiss.IndexFlatL2
+DOC_CHUNKS = {}       # Cache: doc_id -> list of chunk strings
+
+INDEX_DIR = "uploaded_docs"
+os.makedirs(INDEX_DIR, exist_ok=True)
+
+def get_faiss_index_path(doc_id: str) -> str:
+    """Returns the local path to save/load the FAISS index file."""
+    return os.path.join(INDEX_DIR, f"{doc_id}.faiss")
 
 
 def extract_text_from_pdf(pdf_path: str) -> str:
@@ -134,37 +139,72 @@ def _embed(texts: list[str]) -> np.ndarray:
 
 
 
-def embed_and_store(doc_id: str, chunks: list[str]) -> int:
+def embed_and_store(doc_id: str, chunks: list[str], db: Session) -> int:
     """
-    Embeds every chunk of a document and stores the vectors in a new FAISS
-    index keyed by doc_id. Returns the number of chunks stored.
+    Embeds every chunk of a document, saves the FAISS index to disk,
+    and stores the chunk strings in the PostgreSQL/SQLite database.
     """
     vectors = _embed(chunks)
     dimension = vectors.shape[1]  # 3072 for models/gemini-embedding-001
 
-    # IndexFlatL2 = brute-force nearest neighbour search using Euclidean distance.
-    # It's the simplest FAISS index -- exact (not approximate) search, which is
-    # totally fine at this scale (hundreds/thousands of chunks). At millions of
-    # vectors you'd switch to an approximate index like IndexIVFFlat for speed.
     index = faiss.IndexFlatL2(dimension)
     index.add(vectors)
 
+    # Save FAISS index to disk for persistence
+    index_path = get_faiss_index_path(doc_id)
+    faiss.write_index(index, index_path)
+
+    # Store chunk strings in the database
+    db_chunks = [
+        DocumentChunk(document_id=doc_id, chunk_index=idx, chunk_text=chunk)
+        for idx, chunk in enumerate(chunks)
+    ]
+    db.add_all(db_chunks)
+    db.commit()
+
+    # Cache in RAM
     FAISS_INDEXES[doc_id] = index
     DOC_CHUNKS[doc_id] = chunks
 
     return len(chunks)
 
 
-def retrieve_relevant_chunks(doc_id: str, query: str, top_k: int = 4) -> list[str]:
+def retrieve_relevant_chunks(doc_id: str, query: str, db: Session, top_k: int = 8) -> list[str]:
     """
-    Embeds the user's question and searches the FAISS index for that document
-    to find the top_k most similar chunks.
+    Embeds the user's question, loads index/chunks from disk/DB if not cached,
+    and searches the FAISS index for the top_k most similar chunks.
     """
+    # 1. Load FAISS index if not cached
     if doc_id not in FAISS_INDEXES:
-        return []
+        index_path = get_faiss_index_path(doc_id)
+        if os.path.exists(index_path):
+            try:
+                FAISS_INDEXES[doc_id] = faiss.read_index(index_path)
+            except Exception as e:
+                print(f"Error loading FAISS index from disk for {doc_id}: {e}")
+                return []
+        else:
+            return []
+
+    # 2. Load chunk texts from DB if not cached
+    if doc_id not in DOC_CHUNKS:
+        try:
+            chunks_records = (
+                db.query(DocumentChunk)
+                .filter(DocumentChunk.document_id == doc_id)
+                .order_by(DocumentChunk.chunk_index)
+                .all()
+            )
+            DOC_CHUNKS[doc_id] = [c.chunk_text for c in chunks_records]
+        except Exception as e:
+            print(f"Error querying document chunks from database for {doc_id}: {e}")
+            return []
 
     index = FAISS_INDEXES[doc_id]
     chunks = DOC_CHUNKS[doc_id]
+
+    if not chunks:
+        return []
 
     query_vector = _embed([query])
     distances, indices = index.search(query_vector, top_k)
