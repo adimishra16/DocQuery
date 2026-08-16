@@ -656,4 +656,23 @@ button.send-btn:disabled {
   transform: scale(0.98);
 }
 
+.delete-doc-btn {
+  background: none;
+  border: none;
+  color: rgba(255, 255, 255, 0.4);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px;
+  border-radius: 50%;
+  transition: all 0.2s ease;
+  margin-left: 6px;
+}
+
+.delete-doc-btn:hover {
+  background: rgba(239, 68, 68, 0.2);
+  color: #f87171;
+}
+
 

@@ -268,3 +268,27 @@ def ask_llm_with_claude(question: str, context_chunks: list[str]) -> str:
         messages=[{"role": "user", "content": f"Context:\n{context}\n\nQuestion: {question}"}],
     )
     return message.content[0].text
+
+
+def delete_document_artifacts(doc_id: str):
+    """Removes FAISS/chunk caches and deletes PDF and FAISS index files from disk."""
+    # 1. Pop from RAM Cache
+    FAISS_INDEXES.pop(doc_id, None)
+    DOC_CHUNKS.pop(doc_id, None)
+
+    # 2. Delete FAISS file
+    faiss_path = get_faiss_index_path(doc_id)
+    if os.path.exists(faiss_path):
+        try:
+            os.remove(faiss_path)
+        except Exception as e:
+            print(f"Error removing FAISS index file {faiss_path}: {e}")
+
+    # 3. Delete PDF file
+    pdf_path = os.path.join(INDEX_DIR, f"{doc_id}.pdf")
+    if os.path.exists(pdf_path):
+        try:
+            os.remove(pdf_path)
+        except Exception as e:
+            print(f"Error removing PDF file {pdf_path}: {e}")
+

@@ -281,6 +281,31 @@ export default function Home({ isAdmin = false }) {
     }
   }
 
+  async function handleDeleteDocument(docId) {
+    if (!token) return;
+    if (!confirm("Are you sure you want to delete this document and all its chat history?")) return;
+
+    try {
+      const res = await fetch(`${API_BASE}/documents/${docId}`, {
+        method: "DELETE",
+        headers: {
+          "Authorization": `Bearer ${token}`
+        }
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || "Failed to delete document");
+
+      await fetchDocuments();
+      if (activeDocId === docId) {
+        setActiveDocId(null);
+        setMessages([]);
+      }
+    } catch (err) {
+      alert(err.message);
+    }
+  }
+
+
   // --- Auth View ---
   if (!isAuthenticated) {
     return (
@@ -442,6 +467,19 @@ export default function Home({ isAdmin = false }) {
                     </svg>
                   </span>
                   {doc.filename}
+                  <button
+                    className="delete-doc-btn"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleDeleteDocument(doc.doc_id);
+                    }}
+                    title="Delete document"
+                  >
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                      <polyline points="3 6 5 6 21 6"></polyline>
+                      <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+                    </svg>
+                  </button>
                 </div>
               ))}
             </div>

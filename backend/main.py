@@ -292,3 +292,31 @@ def clear_chat_history(
     db.commit()
     return {"message": "Chat history cleared successfully"}
 
+
+@app.delete("/documents/{doc_id}")
+def delete_document(
+    doc_id: str,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Deletes a document, its database records, and its local files/caches."""
+    # Verify the document belongs to the user
+    doc = db.query(models.Document).filter(
+        models.Document.id == doc_id,
+        models.Document.user_id == current_user.id
+    ).first()
+    
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found or access denied.")
+        
+    # Delete database records (cascades to DocumentChunk and ChatMessage)
+    db.delete(doc)
+    db.commit()
+    
+    # Clean up local files and memory caches
+    from rag import delete_document_artifacts
+    delete_document_artifacts(doc_id)
+    
+    return {"message": "Document deleted successfully"}
+
+
