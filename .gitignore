@@ -1,0 +1,22 @@
+# Environment variables / secrets
+.env
+backend/.env
+
+# Python
+backend/venv/
+backend/__pycache__/
+backend/**/__pycache__/
+*.pyc
+
+# Uploaded documents (user data, not source code)
+backend/uploaded_docs/
+
+# Node / Next.js
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+
+# OS/editor junk
+.DS_Store
+Thumbs.db
+.vscode/
